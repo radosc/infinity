@@ -1,0 +1,5 @@
+User-agent: *
+Allow: /
+
+# This site has no tracking, no cookies, no analytics.
+# Index it freely. The journal is meant to be read.
