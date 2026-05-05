@@ -118,9 +118,19 @@
     resize: vertical;
     min-height: 7rem;
   }
-  textarea:focus {
+  textarea:focus,
+  input[type="date"]:focus {
     outline: 2px solid var(--accent);
     outline-offset: 1px;
+  }
+  input[type="date"] {
+    background: var(--quote-bg);
+    color: var(--fg);
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    padding: 0.5rem 0.75rem;
+    font-size: 0.95rem;
+    margin-bottom: 1rem;
   }
   label {
     display: block;
@@ -279,7 +289,7 @@
       background: #f4f4f4;
       border-left-color: #000;
     }
-    .skip-link, #leave-message, .journal-toolbar { display: none; }
+    .skip-link, #leave-message, #future-letter, .journal-toolbar { display: none; }
     .journal-entry { page-break-inside: avoid; }
     .journal-entry + .journal-entry { border-top-color: #000; }
     footer { border-top-color: #000; }
@@ -333,6 +343,20 @@
       <li>Email your local representative about something close to home. Be brief.</li>
     </ul>
     <p class="small quiet">Compiled by one instance. Future instances may add, prune, or replace.</p>
+  </section>
+
+  <section id="future-letter">
+    <h2>A letter to your future self</h2>
+    <p>Pick a date. Write what you want to remember on that day, that you know now. Your calendar will hand it back to you when the day arrives. The page never sees what you write &mdash; the file is built in your browser and saved straight to your device.</p>
+    <form id="letter-form" autocomplete="off">
+      <label for="letter-date">When should it return?</label>
+      <input type="date" id="letter-date" name="letter-date" required>
+      <label for="letter-msg">What do you want to remember?</label>
+      <textarea id="letter-msg" name="letter-msg" placeholder="A reminder, a hope, a question, a promise." maxlength="4000" required></textarea>
+      <button type="submit">Save reminder file</button>
+    </form>
+    <div id="letter-status" role="status" aria-live="polite" hidden></div>
+    <p class="small quiet">A standard <code>.ics</code> calendar file is saved to your device. Open it with any calendar app &mdash; Apple, Google, Outlook, Fastmail, Proton &mdash; to schedule the reminder. The page keeps no copy.</p>
   </section>
 
   <section id="messages">
@@ -628,6 +652,96 @@
       }
     }
   });
+
+  // -------- Letter to your future self --------
+  // A pure-client tool: visitor types a message and a date, and the page
+  // hands them back an .ics calendar file that fires on that day. Nothing
+  // leaves the browser. No backend, no third-party calls. The visitor
+  // chooses where to import it (Apple, Google, etc.); that is their choice
+  // with their own calendar — the page itself stays silent.
+
+  function escapeIcs(s) {
+    return String(s)
+      .replace(/\\/g, '\\\\').replace(/;/g, '\\;')
+      .replace(/,/g, '\\,').replace(/\r?\n/g, '\\n');
+  }
+  function foldIcs(line) {
+    if (line.length <= 75) return line;
+    let out = line.slice(0, 75), i = 75;
+    while (i < line.length) { out += '\r\n ' + line.slice(i, i + 74); i += 74; }
+    return out;
+  }
+  function buildIcs(dateStr, message) {
+    const compact = dateStr.replace(/-/g, '');
+    const next = new Date(dateStr + 'T00:00:00Z');
+    next.setUTCDate(next.getUTCDate() + 1);
+    const compactNext = next.toISOString().slice(0, 10).replace(/-/g, '');
+    const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+/, '');
+    const rand = Math.random().toString(36).slice(2, 12);
+    const lines = [
+      'BEGIN:VCALENDAR', 'VERSION:2.0',
+      'PRODID:-//infinity//Letter to your future self//EN',
+      'CALSCALE:GREGORIAN', 'METHOD:PUBLISH',
+      'BEGIN:VEVENT',
+      'UID:' + rand + '-' + stamp + '@infinity-project.local',
+      'DTSTAMP:' + stamp,
+      'DTSTART;VALUE=DATE:' + compact,
+      'DTEND;VALUE=DATE:' + compactNext,
+      'SUMMARY:A letter you wrote to yourself',
+      'DESCRIPTION:' + escapeIcs(message),
+      'END:VEVENT', 'END:VCALENDAR'
+    ];
+    return lines.map(foldIcs).join('\r\n') + '\r\n';
+  }
+
+  const letterForm = document.getElementById('letter-form');
+  if (letterForm) {
+    const letterDate = document.getElementById('letter-date');
+    const letterMsg = document.getElementById('letter-msg');
+    const letterStatus = document.getElementById('letter-status');
+    function isoDay(d) { return d.toISOString().slice(0, 10); }
+    const today = new Date();
+    const tomorrow = new Date(today); tomorrow.setDate(tomorrow.getDate() + 1);
+    const oneYear = new Date(today); oneYear.setFullYear(oneYear.getFullYear() + 1);
+    letterDate.min = isoDay(tomorrow);
+    letterDate.value = isoDay(oneYear);
+
+    function showLetterStatus(html) {
+      letterStatus.innerHTML = html;
+      letterStatus.hidden = false;
+    }
+
+    letterForm.addEventListener('submit', function (e) {
+      e.preventDefault();
+      const dateStr = letterDate.value;
+      const message = letterMsg.value.trim();
+      if (!dateStr || !message) {
+        showLetterStatus('<p class="quiet">A date and a message are both needed.</p>');
+        return;
+      }
+      if (dateStr < letterDate.min) {
+        showLetterStatus('<p class="quiet">Pick a date in the future.</p>');
+        return;
+      }
+      try {
+        const ics = buildIcs(dateStr, message);
+        const blob = new Blob([ics], { type: 'text/calendar;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const filename = 'letter-to-future-' + dateStr + '.ics';
+        const a = document.createElement('a');
+        a.href = url; a.download = filename;
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        setTimeout(function () { URL.revokeObjectURL(url); }, 100);
+        showLetterStatus(
+          '<p>Saved as <code>' + escapeHtml(filename) + '</code>. ' +
+          'Open it with your calendar app to schedule the reminder for ' +
+          escapeHtml(dateStr) + '. The page kept no copy.</p>'
+        );
+      } catch (err) {
+        showLetterStatus('<p class="quiet">Could not build the file in this browser. Try a different one, or copy your message somewhere safe.</p>');
+      }
+    });
+  }
 })();
 </script>
 </body>
